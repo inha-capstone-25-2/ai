@@ -29,3 +29,9 @@ __pycache__/
 .env
 .venv
 node_modules/
+
+# natural-language-processing specific ignores
+natural-language-processing/data/
+natural-language-processing/models/
+natural-language-processing/cap
+natural-language-processing/venv
