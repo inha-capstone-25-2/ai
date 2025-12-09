@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Nginx Reverse Proxy (Gateway)
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - nlp
+      - rl
+    restart: unless-stopped
+
+  # NLP 요약 서버 (기존 GPU 서버)
+  nlp:
+    build:
+      context: ./natural-language-processing
+      dockerfile: Dockerfile
+    expose:
+      - "8000"
+    volumes:
+      # 모델 파일 마운트 (Docker 이미지에 포함되지 않음)
+      - ./natural-language-processing/models:/app/models:ro
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # RL 추천 서버
+  rl:
+    build:
+      context: ./reinforce-learning
+      dockerfile: Dockerfile
+    expose:
+      - "8001"
+    volumes:
+      # backend-secret 서브모듈 마운트
+      - ./reinforce-learning/backend-secret:/app/backend-secret:ro
+    restart: unless-stopped

@@ -1,0 +1,31 @@
+# Ignore everything by default
+*
+
+# Unignore specific project files and directories
+!natural-language-processing/
+!reinforce-learning/
+!.gitignore
+!docker-compose.yml
+!get-docker.sh
+!nginx.conf
+!server.py
+!Dockerfile
+!requirements.txt
+!.gitmodules
+
+# Ensure contents of unignored directories are tracked
+!natural-language-processing/**
+!reinforce-learning/**
+
+# Re-ignore specific patterns even within white-listed directories if needed (optional)
+.gemini/
+.cache/
+.local/
+.ssh/
+.bash*
+.antigravity-server/
+__pycache__/
+*.pyc
+.env
+.venv
+node_modules/
