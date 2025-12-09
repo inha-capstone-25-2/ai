@@ -6,7 +6,6 @@
 !reinforce-learning/
 !.gitignore
 !docker-compose.yml
-!get-docker.sh
 !nginx.conf
 !server.py
 !Dockerfile

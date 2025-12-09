@@ -42,6 +42,6 @@ services:
     expose:
       - "8001"
     volumes:
-      # backend-secret 서브모듈 마운트
-      - ./reinforce-learning/backend-secret:/app/backend-secret:ro
+      # backend-secret root 마운트
+      - ./backend-secret:/app/backend-secret:ro
     restart: unless-stopped
