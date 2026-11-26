@@ -25,6 +25,7 @@ services:
       - ./natural-language-processing/models:/app/models:ro
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     deploy:
       resources:
         reservations:

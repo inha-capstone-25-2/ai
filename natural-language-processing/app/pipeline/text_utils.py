@@ -1,7 +1,7 @@
 # app/pipeline/text_utils.py
 
 import re
-from typing import List, Dict
+from typing import List
 
 
 def clean_summary_en(text: str) -> str:
@@ -45,11 +45,3 @@ def chunk_text(text: str, max_chars: int = 4000) -> List[str]:
     if buf:
         chunks.append(buf.strip())
     return chunks
-
-
-def build_raw_text(doc: Dict) -> str:
-   
-    abstract = doc.get("abstract") or ""
-    body = doc.get("text") or ""
-    raw_text = (abstract + "\n" + body).strip()
-    return raw_text

@@ -6,12 +6,14 @@ BigBird-Pegasus + M2M100 모델을 사용한 논문 요약 및 번역 API를 제
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Annotated, List
+
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field, FiniteFloat, StringConstraints, model_validator
 
 from app.nlp.summarizer import get_summarizer
 from app.nlp.translator import get_translator
+from app.pipeline import enrich_paper, inference_lock
 
 # 로깅 설정
 logging.basicConfig(
@@ -40,6 +42,31 @@ class SummarizeBatchResponse(BaseModel):
     results: List[SummaryResult]
 
 
+NonBlankString = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class EnrichPaperRequest(BaseModel):
+    abstract: str
+    text: str | None = None
+
+    @model_validator(mode="after")
+    def require_paper_content(self) -> "EnrichPaperRequest":
+        if not self.abstract.strip() and not (self.text or "").strip():
+            raise ValueError("abstract 또는 text에 논문 내용을 입력해야 합니다")
+        return self
+
+
+class EnrichmentSummary(BaseModel):
+    en: NonBlankString
+    ko: NonBlankString
+
+
+class EnrichPaperResponse(BaseModel):
+    summary: EnrichmentSummary
+    keywords: list[str]
+    embedding_vector: list[FiniteFloat] = Field(min_length=1)
+
+
 class HealthResponse(BaseModel):
     """헬스 체크 응답 스키마"""
     status: str
@@ -59,7 +86,7 @@ async def lifespan(app: FastAPI):
     try:
         summarizer = get_summarizer()
         logger.info(f"[Startup] BigBird loaded on {summarizer.device}")
-        
+
         translator = get_translator()
         logger.info(f"[Startup] M2M100 loaded on {translator.device}")
     except Exception as e:
@@ -82,8 +109,19 @@ app = FastAPI(
 # --- API Endpoints ---
 
 
+@app.post("/summarize/enrich", response_model=EnrichPaperResponse)
+def summarize_enrich(request: EnrichPaperRequest):
+    """논문 한 편의 요약, 키워드 및 임베딩을 생성합니다."""
+    try:
+        result = enrich_paper(request.abstract, request.text)
+        return EnrichPaperResponse(**result)
+    except Exception:
+        logger.exception("[API] Paper enrichment failed")
+        raise HTTPException(status_code=500, detail="논문 AI 정보 생성 실패")
+
+
 @app.post("/summarize/batch", response_model=SummarizeBatchResponse)
-async def summarize_batch(request: SummarizeBatchRequest):
+def summarize_batch(request: SummarizeBatchRequest):
     """
     배치 텍스트 요약 및 번역.
     GPU 배치 추론을 사용하여 처리량 극대화.
@@ -98,7 +136,7 @@ async def summarize_batch(request: SummarizeBatchRequest):
         HTTPException: 요약 생성 실패 시
     """
     import time
-    
+
     if not request.texts:
         raise HTTPException(status_code=400, detail="texts는 비어있을 수 없습니다")
 
@@ -108,26 +146,27 @@ async def summarize_batch(request: SummarizeBatchRequest):
     logger.info(f"[API] 요청 텍스트 수: {batch_size}")
 
     try:
-        summarizer = get_summarizer()
-        translator = get_translator()
-        
-        # 1. 배치 요약 (GPU 병렬 처리)
-        summarize_start = time.time()
-        if batch_size == 1:
-            # 단일 텍스트는 기존 방식
-            summaries_en = [summarizer.summarize(request.texts[0])]
-        else:
-            # 여러 텍스트는 배치 처리
-            summaries_en = summarizer.summarize_batch(request.texts)
-        summarize_time = time.time() - summarize_start
-        logger.info(f"[API] 배치 요약 완료 | 소요: {summarize_time:.2f}s | 평균: {summarize_time/batch_size:.2f}s/건")
-        
-        # 2. 배치 번역 (GPU 병렬 처리)
-        translate_start = time.time()
-        summaries_ko = translator.translate_batch(summaries_en)
-        translate_time = time.time() - translate_start
-        logger.info(f"[API] 배치 번역 완료 | 소요: {translate_time:.2f}s | 평균: {translate_time/batch_size:.2f}s/건")
-        
+        with inference_lock:
+            summarizer = get_summarizer()
+            translator = get_translator()
+
+            # 1. 배치 요약 (GPU 병렬 처리)
+            summarize_start = time.time()
+            if batch_size == 1:
+                # 단일 텍스트는 기존 방식
+                summaries_en = [summarizer.summarize(request.texts[0])]
+            else:
+                # 여러 텍스트는 배치 처리
+                summaries_en = summarizer.summarize_batch(request.texts)
+            summarize_time = time.time() - summarize_start
+            logger.info(f"[API] 배치 요약 완료 | 소요: {summarize_time:.2f}s | 평균: {summarize_time/batch_size:.2f}s/건")
+
+            # 2. 배치 번역 (GPU 병렬 처리)
+            translate_start = time.time()
+            summaries_ko = translator.translate_batch(summaries_en)
+            translate_time = time.time() - translate_start
+            logger.info(f"[API] 배치 번역 완료 | 소요: {translate_time:.2f}s | 평균: {translate_time/batch_size:.2f}s/건")
+
         # 결과 생성
         results = []
         for i, (en, ko) in enumerate(zip(summaries_en, summaries_ko)):

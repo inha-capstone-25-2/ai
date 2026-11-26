@@ -1,5 +1,3 @@
-# app/pipeline/__init__.py
+from .pipeline import enrich_paper, inference_lock
 
-from .pipeline import run_sota_pipeline
-
-__all__ = ["run_sota_pipeline"]
+__all__ = ["enrich_paper", "inference_lock"]
