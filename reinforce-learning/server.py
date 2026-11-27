@@ -48,6 +48,7 @@ class RecommendationResponse(BaseModel):
     """추천 API 응답 (백엔드 규격)"""
     user_id: int
     session_id: str
+    recommendation_id: Optional[str] = None
     recommendation_type: str
     recommendations: List[PaperRecommendation]
     total_count: int
@@ -124,7 +125,7 @@ async def lifespan(app: FastAPI):
     try:
         # 간단한 워밍업 호출로 MongoDB 연결 확인
         logger.info("[Startup] Warming up recommendation system...")
-        get_user_recommendations(user_id=1, limit=1)
+        get_user_recommendations(user_id=1, limit=1, log_exposure=False)
         logger.info("[Startup] Recommendation system ready")
     except Exception as e:
         logger.warning(f"[Startup] Warmup failed (will retry on first request): {e}")
@@ -189,12 +190,14 @@ async def get_recommendations(
         raw_result = get_user_recommendations(user_id=user_id, limit=limit)
         
         # 응답 변환
-        session = session_id or create_session_id()
+        recommendation_id = raw_result.get("recommendation_id")
+        session = session_id or recommendation_id or create_session_id()
         recommendations = [transform_paper(p) for p in raw_result.get("results", [])]
         
         response = RecommendationResponse(
             user_id=user_id,
             session_id=session,
+            recommendation_id=recommendation_id,
             recommendation_type="rule_based",
             recommendations=recommendations,
             total_count=len(recommendations),
@@ -237,12 +240,14 @@ async def get_recommendations_rl(
         )
         
         # 응답 변환
-        session = session_id or create_session_id()
+        recommendation_id = raw_result.get("recommendation_id")
+        session = session_id or recommendation_id or create_session_id()
         recommendations = [transform_paper(p) for p in raw_result.get("results", [])]
         
         response = RecommendationResponse(
             user_id=user_id,
             session_id=session,
+            recommendation_id=recommendation_id,
             recommendation_type="rl_based",
             recommendations=recommendations,
             total_count=len(recommendations),

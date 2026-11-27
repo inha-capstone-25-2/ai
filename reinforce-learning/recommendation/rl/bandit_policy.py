@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,15 @@ except ImportError:
     nn = None
 
 
-DEFAULT_MODEL_PATH = Path("models/rl/bandit_policy_latest.pt")
+BUNDLED_MODEL_PATH = Path("models/rl/bandit_policy_latest.pt")
+DEFAULT_MODEL_PATH = Path(os.getenv("RECOMMENDATION_MODEL_PATH") or BUNDLED_MODEL_PATH)
+
+
+def read_model_checkpoint(path: Path, device: str = "cpu") -> tuple[dict, Optional[str]]:
+    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    if "model_state_dict" in checkpoint:
+        return checkpoint["model_state_dict"], checkpoint.get("training_data_digest")
+    return checkpoint, None
 
 
 @dataclass
@@ -75,7 +84,7 @@ class BanditPolicy:
             return
 
         model = SimpleBanditModel(input_dim)
-        state = torch.load(model_path, map_location=self.device)
+        state, _ = read_model_checkpoint(model_path, device=self.device)
         model.load_state_dict(state)
         model.to(self.device)
         model.eval()

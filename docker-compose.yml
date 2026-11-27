@@ -37,12 +37,31 @@ services:
 
   # RL 추천 서버
   rl:
-    build:
+    build: &rl-build
       context: ./reinforce-learning
       dockerfile: Dockerfile
     expose:
       - "8001"
+    environment:
+      RECOMMENDATION_MODEL_PATH: /app/model-updates/bandit_policy_latest.pt
     volumes:
       # backend-secret root 마운트
       - ./backend-secret:/app/backend-secret:ro
+      - recommendation-model:/app/model-updates:ro
     restart: unless-stopped
+
+  rl-trainer:
+    build: *rl-build
+    command: ["python", "-m", "recommendation.rl.trainer.scheduled"]
+    environment:
+      RECOMMENDATION_MODEL_PATH: /app/model-updates/bandit_policy_latest.pt
+      RECOMMENDATION_TRAIN_INTERVAL_SECONDS: ${RECOMMENDATION_TRAIN_INTERVAL_SECONDS:-86400}
+      RECOMMENDATION_TRAIN_MIN_SAMPLES: ${RECOMMENDATION_TRAIN_MIN_SAMPLES:-200}
+      RECOMMENDATION_TRAIN_MIN_PER_LABEL: ${RECOMMENDATION_TRAIN_MIN_PER_LABEL:-20}
+    volumes:
+      - ./backend-secret:/app/backend-secret:ro
+      - recommendation-model:/app/model-updates
+    restart: unless-stopped
+
+volumes:
+  recommendation-model:

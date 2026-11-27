@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Dict, Any, Sequence
 from uuid import uuid4
 
-from bson import ObjectId
 from dotenv import load_dotenv
 from pymongo import MongoClient, DESCENDING
 from sshtunnel import SSHTunnelForwarder
@@ -269,6 +268,7 @@ class MongoDataLoader:
             "user_id": user_id,
             "mode": mode,  # "rule_based" / "rule_based+rl"
             "items": items,
+            "attribution_ready": True,
             "request_meta": request_meta or {},
             "created_at": now,
         }

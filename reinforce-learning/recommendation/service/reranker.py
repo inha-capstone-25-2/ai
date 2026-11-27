@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import List, Optional
 
 import numpy as np
@@ -10,7 +11,12 @@ import numpy as np
 from ..data.data_loader import MongoDataLoader
 from ..models.data_models import RecommendationResult, UserProfile
 from ..rl.state_builder import build_candidate_features
-from ..rl.bandit_policy import SimpleBanditModel, DEFAULT_MODEL_PATH
+from ..rl.bandit_policy import (
+    BUNDLED_MODEL_PATH,
+    DEFAULT_MODEL_PATH,
+    SimpleBanditModel,
+    read_model_checkpoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,38 +29,55 @@ except ImportError:
 @dataclass
 class RerankConfig:
     model_path: Path = Path(DEFAULT_MODEL_PATH)
+    fallback_model_path: Optional[Path] = None
 
 
 class BanditPolicyWrapper:
-    """
-    SimpleBanditModel을 감싸는 래퍼.
-    - 처음 호출 시에만 모델을 로드해서 메모리에 유지
-    - 모델 파일이 없거나 torch 미설치면 None 상태로 두고, 그 경우 rule-based만 사용
-    """
+    """모델 파일이 갱신되면 새 모델을 읽고, 읽기에 실패하면 직전 모델을 사용한다."""
+
     def __init__(self, config: Optional[RerankConfig] = None) -> None:
-        self.config = config or RerankConfig()
+        self.config = config or RerankConfig(fallback_model_path=BUNDLED_MODEL_PATH)
         self._model: Optional[SimpleBanditModel] = None
+        self._attempted_versions: dict[Path, tuple[int, ...]] = {}
+        self._load_lock = Lock()
 
-    def _ensure_model(self, input_dim: int) -> None:
-        if self._model is not None:
-            return
-
-        # torch 없는 환경이면 그대로 포기
+    def _get_model(self, input_dim: int) -> Optional[SimpleBanditModel]:
         if torch is None:
-            logger.warning("[RL Reranker] ⚠️ torch 가 설치되어 있지 않아 RL rerank를 비활성화합니다.")
-            return
+            return None
 
-        if not self.config.model_path.exists():
-            logger.warning(f"[RL Reranker] ⚠️ RL 모델 파일이 없습니다: {self.config.model_path}")
-            return
+        with self._load_lock:
+            paths = [self.config.model_path]
+            if self._model is None and self.config.fallback_model_path is not None:
+                paths.append(self.config.fallback_model_path)
 
-        logger.info(f"[RL Reranker] 🧠 RL 모델 로딩: {self.config.model_path} (input_dim={input_dim})")
-        model = SimpleBanditModel(input_dim=input_dim)
-        state = torch.load(self.config.model_path, map_location="cpu")
-        model.load_state_dict(state)
-        model.eval()
-        self._model = model
-        logger.info("[RL Reranker] ✅ RL 모델 로딩 완료")
+            for path in paths:
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logger.exception("[RL Reranker] 모델 파일에 접근할 수 없습니다: %s", path)
+                    continue
+                version = (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size)
+                if self._attempted_versions.get(path) == version:
+                    continue
+
+                self._attempted_versions[path] = version
+                try:
+                    model = SimpleBanditModel(input_dim=input_dim)
+                    state, _ = read_model_checkpoint(path)
+                    model.load_state_dict(state)
+                    if not all(torch.isfinite(param).all() for param in model.parameters()):
+                        raise ValueError("모델 가중치에 유한하지 않은 값이 있습니다.")
+                    self._model = model.eval()
+                except Exception:
+                    logger.exception("[RL Reranker] 모델을 읽지 못했습니다: %s", path)
+                    continue
+
+                logger.info("[RL Reranker] 모델 로딩 완료: %s", path)
+                break
+
+            return self._model
 
     def predict_scores(self, X: np.ndarray) -> Optional[np.ndarray]:
         """
@@ -64,13 +87,13 @@ class BanditPolicyWrapper:
         if X.size == 0:
             return None
 
-        self._ensure_model(input_dim=X.shape[1])
-        if self._model is None or torch is None:
+        model = self._get_model(input_dim=X.shape[1])
+        if model is None:
             return None
 
         with torch.no_grad():
             t = torch.from_numpy(X).float()
-            y = self._model(t).squeeze(-1).cpu().numpy()
+            y = model(t).cpu().numpy()
         
         logger.info(f"[RL Reranker] 🎲 RL 점수 예측 완료: min={y.min():.4f}, max={y.max():.4f}, mean={y.mean():.4f}")
         return y
@@ -105,7 +128,9 @@ class RLBanditReranker:
 
         # 2) 후보 논문들 feature matrix 생성
         papers = [c.paper for c in candidates]
-        X, paper_ids, _feat_dicts = build_candidate_features(profile, papers)
+        X, _, feature_dicts = build_candidate_features(profile, papers)
+        for candidate, features in zip(candidates, feature_dicts):
+            candidate.features = {**(candidate.features or {}), **features}
         logger.info(f"[RL Reranker] 📊 Feature matrix 생성: shape={X.shape}")
 
         # 3) RL 정책으로 점수 예측

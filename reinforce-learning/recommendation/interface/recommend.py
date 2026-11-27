@@ -17,16 +17,7 @@ def _get_recommender() -> RuleBasedRecommender:
 
 
 def recommend_user(user_id: int, top_k: int = 6) -> List[Dict[str, Any]]:
-    """
-    기존 recommend_for_user를 호출하던 부분을
-    단일 recommend() 함수만 호출하도록 수정.
-    """
-    rec = _get_recommender().recommend(
-        user_id=user_id,
-        paper_id=None,# 유저 기반 추천
-        top_k=top_k,
-        candidate_k=top_k # 굳이 많은 후보 필요 없음
-    )
+    rec = _get_recommender().recommend_for_user(user_id=user_id, top_k=top_k)
     return [r.to_frontend_dict() for r in rec]
 
 
